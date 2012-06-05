@@ -1,213 +1,45 @@
 <?php
-/* BVS Site Importer - 2011
- * 
- * This script imports the XML data of BVS-Site 5.x to a XML_RPC structure. 
- * This structure can be imported in a Wordpress instalation with BVS-Site and
- * Multi Language Framework plugins.
- * 
- * Instructions:
- * - Sets the path for XML-BVS-Site directory in the $XML_DIRECTORY
- * - Sets the language that you wants to make import in $LANGUAGE (in bvs-sites with
- *   more than one idiom, please do the process more times)
- *
- * More information in:
- * - http://github.com/bireme/bvs-site-wp-plugin
- * - http://github.com/bireme/wp-multi-language-framework
- */
 
-ini_set('default_charset', 'utf-8');
+$hostname = "localhost";
+$username = "";
+$password = "";
+$database = "saudepublica";
 
-// XML DIRECTORY that contains items
-$XML_DIRECTORY = '/home/moa/project/bireme/vhost/bvsms/bases/site/xml';
+include_once(dirname(__FILE__) . '/data.inc.php');
 
-// old's URL (with http:// and not last /)
-$URL_OLD = 'http://bvsms.saude.gov.br';
+mysql_connect($hostname, $username, $password);
+mysql_select_db($database);
 
-if(!file_exists($XML_DIRECTORY)) {
-	die("Path does not exists.");
-}
 
-// Language (pt | es | en)
-$LANGUAGE = "pt";
+$sql = "SELECT idnews, title, news FROM news LIMIT 10";
+$query = mysql_query($sql) or die(mysql_error());
 
-require_once(dirname(__FILE__) . '/functions.php');
-
-function get_html_value($node) {
-
-	$content = trim($node->nodeValue);
-	if($content == "") {
-		return "";
-	}
-
-	$html = new DOMDocument();
-	$html->appendChild($html->importNode($node, true));
-	return $html->saveHTML();	
-}
-
-function replace_urls($content) {
-	$content = str_replace("&amp;", '&', $content);
-
-	preg_match_all('/php\/level\.php\?lang=pt&component=[0-9]+&item=[0-9]+/', $content, $all_matches);
-
-	// changing the urls
-	foreach($all_matches as $matches) {
-		foreach($matches as $match) {
-			$orig = $match;
-			$match = str_replace("php/level.php?lang=pt&component=", "", $match);
-			$match = str_replace("&item", "", $match);
-
-			$match = explode("=", $match);
-			$id = $match[0] . 0 . $match[1];
-
-			$url = "?p=" . $id;
-			$content = str_replace($orig, $url, $content);
-		}
-	}
-
-	return $content;
-} 
+$default_fields = array(
+	'wp:author' => 'admin',
+	'wp:status' => 'draft',
+	'wp:post_type' => 'post',
+	'wp:post_parent' => 0,
+);
 
 $items = array();
-foreach(glob($XML_DIRECTORY . '/' . $LANGUAGE . "/??.xml") as $file) {
-	$doc = new DOMDocument();
-	$doc->load($file);
+while($item = mysql_fetch_array($query)) {
+	$tmp = array();
+	foreach($item as $key => $value) {
 
-	$typename = $doc->documentElement->tagName;
-
-	foreach($doc->getElementsByTagName($typename) as $type) {
+		$value = utf8_encode($value);
 		
-		foreach($type->attributes as $attr) {	
-			$items[$typename]['attr'][$attr->name] = $attr->value;
-		}
+		if(!is_numeric($key)) {
 
-		$structure = $type->getElementsByTagName("item");
-
-		foreach($structure as $item) {
-
-			$tmp = array();
-
-			// component id
-			$id_collection = $items[$typename]['attr']['id'];
-		
-			foreach($item->attributes as $attr) {
-				$tmp[$attr->name] = $attr->value;
-				
-				if($attr->name == "available") {
-					if($attr->value == "no") {
-						$tmp[$attr->name] = 'trash';		
-					} else {
-						$tmp[$attr->name] = 'draft';		
-					}
-				}
-
+			switch($key) {
+				case 'idnews': $key = 'wp:post_id'; break;
+				case 'news': $key = 'content:encoded'; break;
+				case 'title': $key = 'title'; break;
 			}
 
-			if(!isset($tmp['id'])) continue;
-			
-			// item id
-			$id_tmp = $tmp['id'];
-
-			if($item->hasChildNodes()) {
-				$tmp['content'] = trim($item->firstChild->nodeValue);
-			}
-			
-			$tmp['parent_id'] = 0;			
-
-			if(isset($tmp['id']) && isset($items[$typename]['attr']['id'])) {
-
-				$tmp['id'] = $id_collection . 0 . $id_tmp;
-				//$tmp['id'] = $id_collection * 10 + $id_tmp;
-			}
-			
-			if($item->hasChildNodes()) {
-
-				// get the first description ONLY.
-				$node = $item->getElementsByTagName('description')->item(0);
-				$tmp[$node->tagName] = trim($node->nodeValue);
-				
-				if($item->getElementsByTagName('portal')->item(0)) {
-
-					$node = $item->getElementsByTagName('portal')->item(0);
-					$content = str_replace('<portal>', '', get_html_value($node));
-					$content = str_replace('</portal>', '', $content);
-					$content = str_replace($URL_OLD, '', $content);
-					$content = replace_urls($content);
-					
-					$tmp[$node->tagName] = $content;
-				}
-
-				if( (isset($tmp['description']) and $tmp['description'] != "") and (isset($tmp['portal']) and $tmp['portal'] == "") ) 
-					$tmp['portal'] = $tmp['description'];
-			} 
-
-
-			// pega os filhos
-			$tmp['childs'] = get_child_ids($item);
-
-			// trata os ids dos filhos
-			foreach($tmp['childs'] as $key => $child) {
-				$tmp['childs'][$key] = $id_collection . 0 . $child;
-			}
-
-			$items[$typename][$tmp['id']] = $tmp;
-		} 
-		
-		
-	}
-
-
-	//break;
-}
-
-// agora itera pegando os filhos e colocando os aprents ids corretos
-foreach($items as $typename => $type) {
-	
-	foreach($type as $item_id => $item) {
-	
-		if(isset($item['childs']) && count($item['childs']) > 0) {
-			
-			foreach($item['childs'] as $child) {
-				
-				if(isset($type[$child])) {
-
-					$items[$typename][$child]['parent_id'] = $item['id'];
-				}
-			}
+			$tmp[$key] = $value;
 		}
 	}
-}
-
-if(isset($_REQUEST['debug'])) {
-	
-	print '<pre>';
-	print_r($items);die;
-}
-
-$parsed_items = array();
-foreach($items as $label => $item) {
-	
-	foreach($item as $itemnumber => $child) {
-		
-		$tmp = array();
-
-		if($label == 'collection' && $itemnumber != "attr") {
-			foreach($child as $key => $value) {
-				
-				switch($key) {
-					case 'content': $tmp['title'] = $value; break;
-					case 'available': $tmp['wp:status'] = $value; break;
-					case 'description': $tmp['excerpt:encoded'] = $value; break;
-					case 'portal': $tmp['content'] = $value; break;
-					case 'href': $tmp['link'] = $value; break;
-					case 'parent_id': $tmp['wp:post_parent'] = $value; break;
-					case 'id': $tmp['wp:post_id'] = $value; break;
-				}
-			}
-
-		}
-		$parsed_items[] = $tmp;
-	}		
-	
+	$items[$item['idnews']] = $tmp;
 }
 
 $dom = new DOMDocument('1.0', 'UTF-8');
@@ -262,7 +94,7 @@ $channel->appendChild($author);
 
 // rss content
 $count = -1;
-foreach($parsed_items as $bvs_item) {
+foreach($items as $bvs_item) {
 
 	//$count++; if($count < 100) continue;
 	
@@ -271,39 +103,21 @@ foreach($parsed_items as $bvs_item) {
 	foreach($bvs_item as $key => $value) {
 		
 		// itens que sao cDATA
-		if(in_array($key, array('content', 'link', 'description'))) {
+		if(in_array($key, array('content_encoded', 'title'))) {
 			
-			if($key == "link") {
-
-				$field = $dom->createElement("wp:postmeta");
-				$subfield = $dom->createElement("wp:meta_key", "_links_to");
-				$field->appendChild($subfield);
-				
-				$subfield = $dom->createElement("wp:meta_value");
-				$cdata = $dom->createCDATASection(replace_urls(trim($value)));
-				// $cdata = $dom->createCDATASection(trim($value));
-				$subfield->appendChild($cdata);
-				
-				$field->appendChild($subfield);
-
-				// <wp:postmeta><wp:meta_key>_links_to</wp:meta_key><wp:meta_value>http://www.opas.org.br/mostrant.cfm?codigodest=343</wp:meta_value></wp:postmeta>
-			} else {
-
-				$field = $dom->createElement("$key");
-				$cdata = $dom->createCDATASection(trim($value));
-				$field->appendChild($cdata);
-			}
-
+			$field = $dom->createElement("$key");
+			$cdata = $dom->createCDATASection(trim($value));
+			$field->appendChild($cdata);
+			
 		} else {
 
-			
 			$field = $dom->createElement("$key", "$value");
 
 		}
 
 		$item->appendChild($field);
 
-		foreach(array('wp:post_type' => 'vhl_collection', 'wp:author' => 'admin') as $key => $value) {
+		foreach($default_fields as $key => $value) {
 			$field = $dom->createElement("$key", "$value");
 			$item->appendChild($field);
 		}
