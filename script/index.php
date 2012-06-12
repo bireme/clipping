@@ -6,12 +6,40 @@ $password = "";
 $database = "saudepublica";
 
 include_once(dirname(__FILE__) . '/data.inc.php');
+require_once(dirname(__FILE__) . '/functions.php');
 
 mysql_connect($hostname, $username, $password);
 mysql_select_db($database);
 
+$terms = array();
 
-$sql = "SELECT idnews, title, news FROM news LIMIT 10";
+// midia
+$sql = "SELECT idcategory, category, description FROM categories";
+$query = mysql_query($sql) or die(mysql_error());
+
+$terms['midia'] = array();
+while($item = mysql_fetch_array($query)) {
+	$id = $item['idcategory'];
+	$terms['midia'][$id]['wp:term_taxonomy'] = 'midia';
+	$terms['midia'][$id]['wp:term_id'] = utf8_encode($item['idcategory']);
+	$terms['midia'][$id]['wp:term_name'] = utf8_encode($item['category']);
+	$terms['midia'][$id]['wp:term_description'] = utf8_encode($item['description']);
+}
+
+// veiculos
+$sql = "SELECT idparent_category, title FROM parent_categories";
+$query = mysql_query($sql) or die(mysql_error());
+
+$terms['veiculo'] = array();
+while($item = mysql_fetch_array($query)) {
+	$id = $item['idparent_category'];
+	$terms['veiculo'][$id]['wp:term_taxonomy'] = 'veiculo';
+	$terms['veiculo'][$id]['wp:term_id'] = $id;
+	$terms['veiculo'][$id]['wp:term_name'] = utf8_encode($item['title']);
+}
+
+$sql = "SELECT sourcenews, page, author, publicationdate, headline, idnews, idparent_category, idcategory, title, news FROM news";
+$sql .= " LIMIT 10";
 $query = mysql_query($sql) or die(mysql_error());
 
 $default_fields = array(
@@ -34,6 +62,13 @@ while($item = mysql_fetch_array($query)) {
 				case 'idnews': $key = 'wp:post_id'; break;
 				case 'news': $key = 'content:encoded'; break;
 				case 'title': $key = 'title'; break;
+				case 'idcategory': $key = 'midia'; break;
+				case 'idparent_category': $key = 'veiculo'; break;
+				case 'headline': $key = 'excerpt:encoded'; break;
+				case 'publicationdate': $key = 'data-de-publicacao'; break;
+				case 'author': $key = 'autor'; break;
+				case 'page': $key = 'paginas'; break;
+				case 'sourcenews': $key = 'fonte'; break;
 			}
 
 			$tmp[$key] = $value;
@@ -83,6 +118,7 @@ foreach($header_items as $key => $value) {
 	$channel->appendChild($key);
 }
 
+// author
 $author = $dom->createElement('wp:author');
 
 foreach(array('wp:author_login' => 'importer', 'wp:author_email' => 'importer@bvs.com') as $key => $value) {
@@ -92,40 +128,82 @@ foreach(array('wp:author_login' => 'importer', 'wp:author_email' => 'importer@bv
 
 $channel->appendChild($author);
 
-// rss content
-$count = -1;
-foreach($items as $bvs_item) {
+// terms
+foreach($terms as $term_type) {
+	foreach($term_type as $term) {
 
-	//$count++; if($count < 100) continue;
-	
-	$item = $dom->createElement('item');
+		$item = $dom->createElement('wp:term');
 
-	foreach($bvs_item as $key => $value) {
-		
-		// itens que sao cDATA
-		if(in_array($key, array('content_encoded', 'title'))) {
-			
+		foreach($term as $key => $value) {
+				
 			$field = $dom->createElement("$key");
-			$cdata = $dom->createCDATASection(trim($value));
+			$cdata = $dom->createCDATASection((trim($value)));
 			$field->appendChild($cdata);
 			
+			$item->appendChild($field);
+		}		
+
+		$item = $channel->appendChild($item);
+	}
+}
+	
+// rss content
+foreach($items as $bvs_item) {
+	
+	$item = $dom->createElement('item');
+	
+
+	foreach($bvs_item as $key => $value) {
+			
+		// if field is some term
+		if(in_array($key, array('midia', 'veiculo'))) {
+
+			$field = $dom->createElement("category");
+			$value = $terms[$key][$value]['wp:term_name'];
+			
+			$domAttribute = $dom->createAttribute('domain');
+			$domAttribute->value = $key;
+			$field->appendChild($domAttribute);
+
+			$domAttribute = $dom->createAttribute('nicename');
+			$domAttribute->value = slugify($value);
+			$field->appendChild($domAttribute);
+
 		} else {
-
-			$field = $dom->createElement("$key", "$value");
-
+			
+			$field = $dom->createElement("$key");
 		}
 
+		$cdata = $dom->createCDATASection(trim($value));
+		$field->appendChild($cdata);
 		$item->appendChild($field);
+
+		// if is additional fields
+		if(in_array($key, array('fonte', 'paginas', 'autor', 'data-de-publicacao'))) {
+
+			$postmeta = $dom->createElement('wp:postmeta');
+			
+			$field = $dom->createElement("wp:meta_key");	
+			$cdata = $dom->createCDATASection(trim($key));
+			$field->appendChild($cdata);
+			$postmeta->appendChild($field);
+
+			$field = $dom->createElement("wp:meta_value");	
+			$cdata = $dom->createCDATASection(trim($value));
+			$field->appendChild($cdata);
+			$postmeta->appendChild($field);
+			
+			$postmeta = $item->appendChild($postmeta);
+		}
 
 		foreach($default_fields as $key => $value) {
 			$field = $dom->createElement("$key", "$value");
 			$item->appendChild($field);
 		}
+
 	}
 
 	$item = $channel->appendChild($item);
-
-
 }
 
 $root->appendChild($channel);
